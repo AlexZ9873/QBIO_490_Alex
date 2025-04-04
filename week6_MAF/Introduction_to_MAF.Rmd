@@ -1,0 +1,221 @@
+---
+title: "Introduction to MAF"
+author: Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/3/24
+alex Zhang
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *At the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+clin_query <- GDCquery(project = "TCGA-BRCA",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'BCR Biotab')
+#GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinic <- clinical.BCRtab.all$clinical_patient_brca[-c(1,2),]
+```
+```{r}
+knitr::opts_knit$set(root.dir = normalizePath("/project/rohs_1070/analysis_data"))
+```
+
+
+```{r}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/alexz/490_cluster/analysis_data"))
+```
+
+```{r}
+maf_query <- GDCquery(
+project = "TCGA-BRCA",
+data.category = "Simple Nucleotide Variation",
+access = "open",
+data.type = "Masked Somatic Mutation",
+workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+#GDCdownload(maf_query,files.per.chunk = 10)
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <-
+"Tumor_Sample_Barcode"
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf,
+clinicalData = clinic,
+isTCGA = TRUE)
+```
+
+
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+clinic$er_status <- ifelse(clinic$er_status_by_ihc == "Positive", "Positive", "Negative")
+str(clinic)
+head(clinic)
+```
+
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+
+library(maftools)
+library(dplyr)
+
+
+maf_pos <- ifelse(maf_object@clinical.data$er_status_by_ihc == "Positive", T, F)
+maf_neg <- ifelse(maf_object@clinical.data$er_status_by_ihc == "Negative", T, F)
+
+pos_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_pos]
+neg_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_neg]
+
+pos_maf_object <- subsetMaf(maf_object, tsb = pos_barcodes)
+neg_maf_object <- subsetMaf(maf_object, tsb = neg_barcodes)
+
+
+coOncoplot(
+  m1 = pos_maf_object,
+  m2 = neg_maf_object,
+  m1Name = "Positive ER status by IHC",
+  m2Name = "Negative status",
+  genes = NULL,  # Automatically selects the top mutated genes
+
+)
+```
+PIK3CA encodes the p110α catalytic subunit of phosphatidylinositol 3-kinase, which is a crucial player in the PI3K/AKT signaling pathway that regulates Cell growth and proliferation, metabolism, and angiogenesis. 
+The discrepancy likely reflects biological differences between tumor subtypes, particularly ER status, and their reliance on different signaling pathways.
+
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+
+library(maftools)
+library(vcd)
+
+gene <- "PIK3CA" #gge
+
+mutated <- maf_object@data$Tumor_Sample_Barcode[maf_object@data$Hugo_Symbol == gene] #find mutated gene
+
+clinical_data <- maf_object@clinical.data #add mutation status
+clinical_data$mutation <- ifelse(clinical_data$Tumor_Sample_Barcode %in% mutated, "Mutated", "Not Mutated")
+#keep er status positive and negative
+clinical_data <- clinical_data[clinical_data$er_status_by_ihc %in% c("Positive", "Negative"), ]
+
+clinical_data$mutation <- factor(clinical_data$mutation)
+clinical_data$er_status_by_ihc <- factor(clinical_data$er_status_by_ihc)
+
+
+tab <- table(clinical_data$mutation, clinical_data$er_status_by_ihc) #make table
+print(tab)
+
+# Fisher's test
+fisher.test(tab)
+# Mosaic plot
+mosaicplot(tab)
+
+```
+The p value is samll so there is strong evidence to reject the null hypothesis that mutation status is independent of ER status.The odd ratio is less than 1 so the odds of PIK3CA mutation in ER-negative patients is much lower compared to ER-positive patients. The 95 percent confidence interval shows that there is significant differences because it does not include 1 in the interval. 
+
+```{r}
+install.packages("vcd")
+
+```
+
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+library(maftools)
+
+
+maf_pos <- ifelse(maf_object@clinical.data$er_status_by_ihc == "Positive", T, F)
+maf_neg <- ifelse(maf_object@clinical.data$er_status_by_ihc == "Negative", T, F)
+
+pos_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_pos]
+neg_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_neg]
+
+pos_maf_object <- subsetMaf(maf_object, tsb = pos_barcodes)
+neg_maf_object <- subsetMaf(maf_object, tsb = neg_barcodes)
+
+
+
+# Use lollipopPlot2 from maftools
+lollipopPlot2(
+  m1 = pos_maf_object,
+  m2 = neg_maf_object,
+  gene = "PIK3CA",
+  m1_name = "ER Positive",
+  m2_name = "ER Negative"
+)
+
+
+
+```
+PIK3CA mutations are significantly more common in ER Positive tumors with 39.44% mutation rate, whereas 15.64% of the ER Negative population show PIK3CA mutations.
+
+
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+# Install packages
+if (!require(survival)) install.packages("survival")
+if (!require(survminer)) install.packages("survminer")
+if (!require(ggplot2)) install.packages("ggplot2")
+library(survival)
+library(survminer)
+library(ggplot2)
+library(maftools)
+
+
+
+maf_object@clinical.data$overallTime <- ifelse(maf_object@clinical.data$vital_status == "Dead", as.numeric(maf_object@clinical.data$death_days_to), as.numeric(maf_object@clinical.data$last_contact_days_to))
+
+maf_object@clinical.data$overallSurvival <- ifelse(maf_object@clinical.data$vital_status == "Dead", TRUE, FALSE)
+maf_object@clinical.data <- subset(maf_object@clinical.data, overallTime >= 0 & !is.na(overallTime))
+
+
+#clinical_data$survival_time <- ifelse(maf_object)
+#clinical_data$time <- as.numeric(ifelse(clinical_data$vital_status == "Dead", clinical_data$death_days_to , clinical_data$last_contact_days_to))
+#mclinical_data$Overall_Survival_Status <- clinical_data$vital_status == "Dead"
+
+
+
+
+
+```
+
+```{r}
+mafSurvival(maf = maf_object,
+genes= "PIK3CA",
+time = "overallTime",
+Status = "overallSurvival",
+isTCGA = TRUE)
+
+```
+The survival rate between Mutant and WT are nearly overlapping with each other, so there is no strong evidence that PIK3CA mutation affects overall survival in this dataset.
+Some hypothesis could be that it is frequent in less aggressive subtypes, or patients with the mutation may be responding well to targeted therapy, neutralizing its effect on survival.
+
+
+
