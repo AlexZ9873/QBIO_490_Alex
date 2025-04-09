@@ -33,14 +33,12 @@ install.packages("Enhanced Volcano")
 library(EnhancedVolcano)
 ```
 ```{r}
-# If you haven't installed BiocManager yet, run this once:
-install.packages("BiocManager")
 
-# Use BiocManager to install EnhancedVolcano (it's a Bioconductor package)
-BiocManager::install("EnhancedVolcano")
 
 # Load the library
 library(EnhancedVolcano)
+install.packages("ggplot2")
+install.packages("ggrepel")
 
 ```
 
@@ -52,7 +50,7 @@ rna_query <- GDCquery(project ="TCGA-SKCM",
 data.category = "Transcriptome Profiling",
 data.type = "Gene Expression Quantification",
 workflow.type = "STAR - Counts")
-GDCdownload(rna_query)
+#GDCdownload(rna_query)
 rna_se <- GDCprepare(rna_query)
 ```
 
@@ -136,29 +134,38 @@ results <- data.frame(results)
 Prepare results dataframe for EnhancedVolcano plotting. Add two columns, "-log10(padj)" and "gene_name". Fill in these columns appropriately.
 ```{r}
 results$gene_name <- clean_genes$gene_name
+results$padj <- as.numeric(results$padj)
 results$log10_padj <- -log10(results$padj)
+
 ```
 
 *4*
 Now we will use the EnhancedVolcano package to plot our results. The code is already completed and should run without adjustment if all code up to here is correct.
 ```{r}
-EnhancedVolcano(results,
+volcano_plot <- EnhancedVolcano(results,
                 lab = results$gene_name,
                 x = 'log2FoldChange',
-                y = '-log10(padj)',
+                y = 'log10_padj',
                 title = 'Sample Definition: Tumor vs Normal Tissue',
                 pointSize = 1.0,
                 labSize = 5.0)
+print(volcano_plot)
 ```
 
 *5*
 # Explain what genes from each part of the Volcano Plot mean in terms of their significance and up/down regulation. 
-top-right genes: 
-bottom-right genes: 
-top-left genes: 
-bottom-left genes: 
-top-middle genes: 
-bottom-middle genes: 
+top-right genes: strongly upregulated and statistically significant WITH LOW P VALUE
+bottom-right genes: increased expression(up regulated), but not significantly
+top-left genes: strongly downregulated and statistically significant
+bottom-left genes: reduced expression(downregulated), but it’s not statistically significant.
+top-middle genes: significantly different, but with minimal fold change
+bottom-middle genes: neither differentially expressed nor statistically significant 
 
 Save the picture of the volcano plot (using either ggsave() or right clicking and manually downloading the image and push this .Rmd and the image to GitHub)
+```{r}
+setwd("/home1/alexz/490_cluster/analysis_data/week7_Transcriptomics")
+library(ggplot2)
+ggsave("volcano_plot.png", plot = volcano_plot, width = 8, height = 6, dpi = 300) #ok
+```
+
 
