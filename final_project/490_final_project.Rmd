@@ -1,0 +1,402 @@
+---
+title: "490 final project"
+Alex Zhang and Zainab Neemuchwala
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+library(SummarizedExperiment)
+
+clin_query <- GDCquery(project = "TCGA-THCA",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'BCR Biotab')
+#GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinic <- clinical.BCRtab.all$clinical_patient_thca[-c(1,2),]
+unique(clinic$metastatic_site)
+```
+```{r}
+# Load required libraries
+library(survival)
+library(survminer)
+library(dplyr)
+
+# Define BRAF mutation status using MAF ---
+braf_mutated_barcodes <- subsetMaf(maf_object, genes = "BRAF", mafObj = TRUE)@data$Tumor_Sample_Barcode
+
+# Assign Mutated/Wild-Type in clinic
+clinic$BRAF_status_maf <- ifelse(
+  clinic$Tumor_Sample_Barcode %in% braf_mutated_barcodes,
+  "Mutated",
+  "Wild-Type"
+)
+
+# Filter to radiation-treated patients with survival + mutation data ---
+clinic_rad <- clinic %>%
+  filter(
+    radiation_treatment_adjuvant == "YES",
+    !is.na(BRAF_status_maf),
+    !is.na(vital_status),
+    !is.na(last_contact_days_to) | !is.na(death_days_to)
+  )
+
+# Create survival variables ---
+clinic_rad$survival_time <- ifelse(
+  clinic_rad$vital_status == "Alive",
+  clinic_rad$last_contact_days_to,
+  clinic_rad$death_days_to
+)
+clinic_rad$survival_time <- as.numeric(clinic_rad$survival_time)
+clinic_rad$survival_event <- ifelse(clinic_rad$vital_status == "Dead", 1, 0)
+
+# Fit KM model ---
+fit_braf_rad <- survfit(Surv(survival_time, survival_event) ~ BRAF_status_maf, data = clinic_rad)
+
+# Kaplan-Meier plot ---
+km_plot <- ggsurvplot(
+  fit_braf_rad,
+  data = clinic_rad,
+  pval = TRUE,
+  conf.int = TRUE,
+  risk.table = TRUE,
+  title = "Survival in Radiation-Treated Patients by BRAF Mutation Status",
+  legend.title = "BRAF Status",
+  legend.labs = levels(factor(clinic_rad$BRAF_status_maf)),
+  palette = c("#E64B35", "#4DBBD5"),  # Optional custom color
+  risk.table.height = 0.25,
+  surv.line.size = 1.5,
+  ggtheme = theme_bw()
+)
+
+# Fix font size only for main KM plot
+km_plot$plot <- km_plot$plot +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+
+print(km_plot)
+
+km_data <- clinic_rad %>%
+  filter(
+    radiation_treatment_adjuvant == "YES",
+    !is.na(survival_time),
+    !is.na(survival_event),
+    !is.na(BRAF_status_maf)
+  )
+
+nrow(km_data)  # Total N
+
+table(km_data$BRAF_status_maf)  # Group breakdown
+
+```
+```{r}
+ggsave("KM_plot_BRAF_radiation.png", plot = km_plot$plot,
+       width = 8, height = 6, dpi = 300)
+
+```
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Filter radiation-treated patients with known BRAF and residual tumor
+residual_data <- clinic %>%
+  filter(
+    radiation_treatment_adjuvant == "YES",
+    !is.na(BRAF_status_maf),
+    residual_tumor %in% c("R0", "R1", "R2", "RX")
+  ) %>%
+  mutate(
+    BRAF_status_maf = factor(BRAF_status_maf, levels = c("Wild-Type", "Mutated")),
+    
+    # Step 2: Convert residual tumor category to numeric ordinal score
+    residual_numeric = case_when(
+      residual_tumor == "R0" ~ 0,
+      residual_tumor == "R1" ~ 1,
+      residual_tumor == "R2" ~ 2,
+      residual_tumor == "RX" ~ 3,
+      TRUE ~ NA_real_
+    )
+  )
+
+# Create the box plot
+library(ggplot2)
+
+residual_plot <- ggplot(residual_data, aes(x = BRAF_status_maf, fill = residual_tumor)) +
+  geom_bar(position = "fill") +
+  labs(
+    title = "Residual Tumor Composition by BRAF Status (Radiation Treated)",
+    x = "BRAF Status",
+    y = "Proportion of Patients",
+    fill = "Residual Tumor"
+  ) +
+  theme_minimal(base_size = 14)
+# Contingency table of BRAF status vs residual tumor
+table_ct <- table(
+  clinic$residual_tumor[clinic$radiation_treatment_adjuvant == "YES"],
+  clinic$BRAF_status_maf[clinic$radiation_treatment_adjuvant == "YES"]
+)
+
+# Chi-squared test
+chisq.test(table_ct)
+
+ggsave("residual_tumor_braf_radiation.png", plot = residual_plot,
+       width = 8, height = 6, dpi = 300)
+
+# smaple size
+residual_bar_data <- clinic %>%
+  filter(
+    radiation_treatment_adjuvant == "YES",
+    !is.na(BRAF_status_maf),
+    residual_tumor %in% c("R0", "R1", "R2", "RX")
+  )
+
+# Sample size
+nrow(residual_bar_data)
+table(residual_bar_data$BRAF_status_maf)
+
+```
+
+
+
+
+```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+```{r}
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <-
+"Tumor_Sample_Barcode"
+maf_query <- GDCquery(
+project = "TCGA-THCA",
+data.category = "Simple Nucleotide Variation",
+access = "open",
+data.type = "Masked Somatic Mutation",
+workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+#GDCdownload(maf_query)
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf,
+clinicalData = clinic,
+isTCGA = TRUE)
+```
+```{r}
+rna_query <- GDCquery(project ="TCGA-THCA",
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts")
+#GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+```
+
+```{r}
+# Identify BRAF-mutated samples in the MAF file
+braf_mut_samples <- subsetMaf(maf_object, genes = "BRAF", mafObj = TRUE)@data$Tumor_Sample_Barcode
+
+#  Map BRAF status based on sample barcode presence
+clinic$BRAF_status_maf <- ifelse(clinic$Tumor_Sample_Barcode %in% braf_mut_samples, "Mutated", "Wild-Type")
+
+#  Inspect the count
+table(clinic$BRAF_status_maf)
+# Match patient/sample IDs between clinical data and MAF
+maf_object@clinical.data$BRAF_status <- clinic$BRAF_status_maf[match(
+  maf_object@clinical.data$Tumor_Sample_Barcode,
+  clinic$Tumor_Sample_Barcode
+)]
+
+# Define barcodes
+mut_samples <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_object@clinical.data$BRAF_status == "Mutated"]
+wt_samples <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_object@clinical.data$BRAF_status == "Wild-Type"]
+
+braf_mutated_clinic <- clinic %>% filter(BRAF_status_maf == "Mutated")
+
+
+group_distant <- braf_mutated_clinic %>%
+  filter(metastatic_site %in% c("Bone", "Lung", "Other"))
+
+group_lymph_only <- braf_mutated_clinic %>%
+  filter(metastatic_site == "[Not Available]")
+# Barcodes
+distant_barcodes <- group_distant$Tumor_Sample_Barcode
+lymph_barcodes <- group_lymph_only$Tumor_Sample_Barcode
+
+# Subset MAF
+maf_distant <- subsetMaf(maf_object, tsb = distant_barcodes)
+maf_lymph <- subsetMaf(maf_object, tsb = lymph_barcodes)
+
+```
+```{r}
+# Oncoplot for all patients in the MAF
+oncoplot(
+  maf = maf_object,
+  top = 20,  # show top 20 most frequently mutated genes
+  draw_titv = TRUE,
+  sortByAnnotation = TRUE,
+  titleText = "Oncoplot: All BRCA Patients"
+)
+
+```
+```{r}
+# Load required library
+library(maftools)
+
+# Subset the MAF object for BRAF-mutated patients
+maf_braf_mut <- subsetMaf(maf = maf_object, tsb = braf_mutated_barcodes)
+
+# Subset the MAF object for BRAF-wildtype patients
+braf_wildtype_barcodes <- clinic$Tumor_Sample_Barcode[!(clinic$Tumor_Sample_Barcode %in% braf_mutated_barcodes)]
+maf_braf_wt <- subsetMaf(maf = maf_object, tsb = braf_wildtype_barcodes)
+
+p <- somaticInteractions(
+  maf = maf_braf_mut,
+  top = 20,
+  pvalue = TRUE
+)
+
+# Print the plot and adjust style
+p$interaction.plot +
+  theme_minimal(base_size = 16) +  # larger font
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 14)
+  )
+
+
+
+# Somatic interaction plot for BRAF-wildtype patients
+somaticInteractions(maf = maf_braf_wt,
+                    top = 20,
+                    pvalue = TRUE)
+
+
+```
+
+
+
+
+
+
+
+```{r}
+rna_query <- GDCquery(project ="TCGA-THCA",
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts")
+#GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+```
+```{r}
+
+# Load necessary libraries
+library(DESeq2)
+library(EnhancedVolcano)
+
+
+
+# Combine barcodes and label group
+braf_status <- data.frame(
+  sample = c(as.character(braf_mutated_barcodes), as.character(braf_wildtype_barcodes)),
+  BRAF_status = c(rep("Mutated", length(braf_mutated_barcodes)),
+                  rep("Wild-Type", length(braf_wildtype_barcodes)))
+)
+
+# Match to RNA-Seq sample names (first 15 characters match sample barcodes)
+all_rna_samples <- substr(colnames(rna_se), 1, 15)
+braf_status <- braf_status[braf_status$sample %in% all_rna_samples, ]
+matching_idx <- match(substr(colnames(rna_se), 1, 15), braf_status$sample)
+
+# Assign BRAF status to colData
+colData(rna_se)$BRAF_status <- NA
+colData(rna_se)$BRAF_status[!is.na(matching_idx)] <- braf_status$BRAF_status[matching_idx[!is.na(matching_idx)]]
+rna_se_subset <- rna_se[, !is.na(colData(rna_se)$BRAF_status)]
+colData(rna_se_subset)$BRAF_status <- factor(colData(rna_se_subset)$BRAF_status)
+
+# Truncate RNA column names to first 12 characters
+rna_barcodes_12 <- substr(colnames(rna_se), 1, 12)
+
+#Assign BRAF status
+braf_status <- data.frame(
+  sample = rna_barcodes_12,
+  BRAF_status = ifelse(rna_barcodes_12 %in% braf_mutated_barcodes, "Mutated",
+                       ifelse(rna_barcodes_12 %in% braf_wildtype_barcodes, "Wild-Type", NA))
+)
+
+#  Filter out NA BRAF samples
+valid_idx <- which(!is.na(braf_status$BRAF_status))
+rna_se_filtered <- rna_se[, valid_idx]
+
+# Add the BRAF status to colData
+colData(rna_se_filtered)$BRAF_status <- factor(braf_status$BRAF_status[valid_idx])
+
+
+# Create DESeq2 object
+dds <- DESeqDataSet(rna_se_filtered, design = ~ BRAF_status)
+dds <- dds[rowSums(counts(dds)) > 10, ]  # Filter low-count genes
+dds <- DESeq(dds)
+res <- results(dds)
+res_df <- as.data.frame(res)
+
+library(ggplot2)
+
+# Add significance categories
+res_df$gene <- rownames(res_df)
+res_df$significance <- "Not Significant"
+res_df$significance[res_df$padj < 0.05 & res_df$log2FoldChange > 1] <- "Upregulated in BRAF+"
+res_df$significance[res_df$padj < 0.05 & res_df$log2FoldChange < -1] <- "Downregulated in BRAF+"
+
+# Make the volcano plot
+volcano_plot <- ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = significance), alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("Upregulated in BRAF+" = "red",
+                                "Downregulated in BRAF+" = "blue",
+                                "Not Significant" = "grey")) +
+  theme_minimal(base_size = 14) +
+  labs(title = "Differential Gene Expression: BRAF+ vs BRAF-",
+       x = "Log2 Fold Change",
+       y = "-Log10 Adjusted p-value",
+       color = "Gene Status") +
+  theme(legend.position = "bottom")
+
+# Show plot
+print(volcano_plot)
+
+```
+```{r}
+# Example: rna_genes has gene_id and gene_name columns
+res_df$gene <- rna_genes$gene_name[match(rownames(res_df), rna_genes$gene_id)]
+EnhancedVolcano(res_df,
+    lab = res_df$gene,
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'Expression in BRAF+ vs BRAF- Patients',
+    subtitle = 'EnhancedVolcano',
+    xlab = expression(Log[2]~fold~change),
+    ylab = expression(-Log[10]~adjusted~italic(P)),
+    pCutoff = 0.05,
+    FCcutoff = 1.0,
+    pointSize = 1.5,
+    labSize = 4.5,
+    col = c("grey30", "forestgreen", "royalblue", "red2"),
+    colAlpha = 0.75,
+    legendLabels = c("NS", "Log2 FC", "p-value", "p-value and Log2 FC"),
+    legendPosition = "top",
+    drawConnectors = TRUE,
+    widthConnectors = 0.25,
+    max.overlaps = 10
+)
+
+```
+
